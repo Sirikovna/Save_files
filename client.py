@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox
 import socket
 import os
 import threading
@@ -8,6 +8,9 @@ from datetime import datetime
 
 SERVER_HOST = 'localhost'
 SERVER_PORT = 12345
+OUTPUT_DIR = 'D:\\repos\\Save_files\\output'
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 class FileDownloaderClient:
     def __init__(self, root):
@@ -16,121 +19,133 @@ class FileDownloaderClient:
         self.root.geometry("800x600")
         
         self.socket = None
-        self.download_thread = None
-        self.stop_download = False
+        self.thread = None
+        self.stop = False
         
-        self.setup_ui()
-        self.connect_to_server()
+        self.create_gui()
+        self.connect()
         
-    def setup_ui(self):
-        """Создание графического интерфейса"""
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.pack(fill='both', expand=True)
-        title_label = ttk.Label(main_frame, text="File Downloader Client", 
-                               font=('Arial', 14, 'bold'))
-        title_label.pack(pady=(0, 10))
-        frame_files = ttk.LabelFrame(main_frame, text="Файлы на сервере:", padding="10")
-        frame_files.pack(fill='both', expand=True, pady=5)
+    def create_gui(self):
+        main = ttk.Frame(self.root, padding="10")
+        main.pack(fill='both', expand=True)
+        
+        title = ttk.Label(main, text="File Downloader Client", font=('Arial', 14, 'bold'))
+        title.pack(pady=(0, 10))
+        
+        files_frame = ttk.LabelFrame(main, text="Files on server:", padding="10")
+        files_frame.pack(fill='both', expand=True, pady=5)
 
-        columns = ('filename', 'size')
-        self.tree_files = ttk.Treeview(frame_files, columns=columns, show='headings', height=6)
-        self.tree_files.heading('filename', text='Имя файла')
-        self.tree_files.heading('size', text='Размер (байт)')
-        self.tree_files.column('filename', width=400)
-        self.tree_files.column('size', width=150)
+        self.tree = ttk.Treeview(files_frame, columns=('name', 'size'), show='headings', height=6)
+        self.tree.heading('name', text='File name')
+        self.tree.heading('size', text='Size (bytes)')
+        self.tree.column('name', width=400)
+        self.tree.column('size', width=150)
 
-        scrollbar = ttk.Scrollbar(frame_files, orient="vertical", command=self.tree_files.yview)
-        self.tree_files.configure(yscrollcommand=scrollbar.set)
+        scroll = ttk.Scrollbar(files_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
         
-        self.tree_files.pack(side='left', fill='both', expand=True)
-        scrollbar.pack(side='right', fill='y')
+        self.tree.pack(side='left', fill='both', expand=True)
+        scroll.pack(side='right', fill='y')
 
-        frame_buttons = ttk.Frame(main_frame)
-        frame_buttons.pack(fill='x', pady=10)
+        buttons = ttk.Frame(main)
+        buttons.pack(fill='x', pady=10)
         
-        self.btn_refresh = ttk.Button(frame_buttons, text="Обновить список", 
-                                     command=self.refresh_file_list)
+        self.btn_refresh = ttk.Button(buttons, text="Refresh list", command=self.get_files)
         self.btn_refresh.pack(side='left', padx=5)
         
-        self.btn_download = ttk.Button(frame_buttons, text="Скачать выбранный", 
-                                      command=self.start_download_thread)
+        self.btn_download = ttk.Button(buttons, text="Download selected", command=self.start_download)
         self.btn_download.pack(side='left', padx=5)
         
-        self.btn_cancel = ttk.Button(frame_buttons, text="Отменить", 
-                                    command=self.cancel_download, state='disabled')
+        self.btn_cancel = ttk.Button(buttons, text="Cancel", command=self.cancel_download, state='disabled')
         self.btn_cancel.pack(side='left', padx=5)
         
-        self.btn_show_logs = ttk.Button(frame_buttons, text="Показать логи", 
-                                       command=self.show_logs)
-        self.btn_show_logs.pack(side='left', padx=5)
+        self.btn_logs = ttk.Button(buttons, text="Show logs", command=self.show_logs)
+        self.btn_logs.pack(side='left', padx=5)
+        
+        self.btn_open = ttk.Button(buttons, text="Open output", command=self.open_output)
+        self.btn_open.pack(side='left', padx=5)
 
-        self.progress = ttk.Progressbar(main_frame, mode='indeterminate')
+        self.progress = ttk.Progressbar(main, mode='indeterminate')
         self.progress.pack(fill='x', pady=5)
 
-        frame_info = ttk.LabelFrame(main_frame, text="Информация о скачивании:", padding="10")
-        frame_info.pack(fill='x', pady=5)
+        info_frame = ttk.LabelFrame(main, text="Compression info:", padding="10")
+        info_frame.pack(fill='x', pady=5)
         
-        self.lbl_info = ttk.Label(frame_info, text="Выберите файл для скачивания", 
-                                 wraplength=600)
-        self.lbl_info.pack(pady=5)
+        grid = ttk.Frame(info_frame)
+        grid.pack(fill='x')
+        
+        ttk.Label(grid, text="Original:").grid(row=0, column=0, sticky='w', padx=5, pady=2)
+        self.lbl_orig = ttk.Label(grid, text="0 bytes")
+        self.lbl_orig.grid(row=0, column=1, sticky='w', padx=5, pady=2)
+        
+        ttk.Label(grid, text="Archive:").grid(row=1, column=0, sticky='w', padx=5, pady=2)
+        self.lbl_comp = ttk.Label(grid, text="0 bytes")
+        self.lbl_comp.grid(row=1, column=1, sticky='w', padx=5, pady=2)
+        
+        ttk.Label(grid, text="Ratio:").grid(row=2, column=0, sticky='w', padx=5, pady=2)
+        self.lbl_ratio = ttk.Label(grid, text="0%")
+        self.lbl_ratio.grid(row=2, column=1, sticky='w', padx=5, pady=2)
+        
+        ttk.Label(grid, text="Saved:").grid(row=3, column=0, sticky='w', padx=5, pady=2)
+        self.lbl_save = ttk.Label(grid, text="0 bytes")
+        self.lbl_save.grid(row=3, column=1, sticky='w', padx=5, pady=2)
+        
+        self.lbl_status = ttk.Label(info_frame, text="Select file", wraplength=600, font=('Arial', 10))
+        self.lbl_status.pack(pady=5)
 
-        self.status_var = tk.StringVar()
-        self.status_var.set("Готов к работе")
-        status_bar = ttk.Label(main_frame, textvariable=self.status_var, 
-                              relief='sunken', anchor='w')
+        self.status_text = tk.StringVar()
+        self.status_text.set("Ready")
+        status_bar = ttk.Label(main, textvariable=self.status_text, relief='sunken', anchor='w')
         status_bar.pack(fill='x', side='bottom', pady=(5, 0))
         
-    def connect_to_server(self):
-        """Подключение к серверу"""
+    def connect(self):
         try:
-            self.status_var.set("Подключаемся к серверу...")
+            self.status_text.set("Connecting...")
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.settimeout(10)
             self.socket.connect((SERVER_HOST, SERVER_PORT))
             self.socket.settimeout(None)
-            self.status_var.set("Подключено к серверу")
-            self.refresh_file_list()
+            self.status_text.set("Connected")
+            self.get_files()
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось подключиться к серверу: {e}")
-            self.status_var.set("Ошибка подключения")
+            messagebox.showerror("Error", f"Cannot connect: {e}")
+            self.status_text.set("Error")
             
-    def refresh_file_list(self):
-        """Запрос списка файлов у сервера"""
+    def get_files(self):
         try:
-            self.status_var.set("Получаем список файлов...")
+            self.status_text.set("Getting files...")
             self.btn_refresh.config(state='disabled')
             self.socket.send("LIST".encode('utf-8'))
-            response = self.socket.recv(4096).decode('utf-8')
+            data = self.socket.recv(4096).decode('utf-8')
 
-            for item in self.tree_files.get_children():
-                self.tree_files.delete(item)
-            if response:
-                files = response.split(";")
-                file_count = 0
+            for item in self.tree.get_children():
+                self.tree.delete(item)
+                
+            if data:
+                files = data.split(";")
+                count = 0
                 for file_info in files:
                     if "|" in file_info:
-                        filename, size = file_info.split("|")
-                        self.tree_files.insert('', 'end', values=(filename, size))
-                        file_count += 1
+                        name, size = file_info.split("|")
+                        self.tree.insert('', 'end', values=(name, size))
+                        count += 1
                 
-                self.status_var.set(f"Найдено {file_count} файлов")
-                if file_count == 0:
-                    self.lbl_info.config(text="На сервере нет файлов для скачивания")
+                self.status_text.set(f"Found {count} files")
+                self.lbl_status.config(text=f"Found {count} files")
             else:
-                self.status_var.set("На сервере нет файлов")
-                self.lbl_info.config(text="На сервере нет файлов")
+                self.status_text.set("No files")
+                self.lbl_status.config(text="No files")
                         
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка при получении списка файлов: {e}")
-            self.status_var.set("Ошибка получения списка файлов")
+            messagebox.showerror("Error", f"Error: {e}")
+            self.status_text.set("Error")
         finally:
             self.btn_refresh.config(state='normal')
             
-    def start_download_thread(self):
-        """Запуск скачивания в отдельном потоке"""
-        selected_item = self.tree_files.selection()
-        if not selected_item:
-            messagebox.showwarning("Предупреждение", "Выберите файл для скачивания")
+    def start_download(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "Select file")
             return
 
         self.btn_download.config(state='disabled')
@@ -138,17 +153,16 @@ class FileDownloaderClient:
         self.btn_cancel.config(state='normal')
         self.progress.start()
         
-        filename = self.tree_files.item(selected_item[0])['values'][0]
-        self.stop_download = False
-        self.download_thread = threading.Thread(target=self.download_file, args=(filename,))
-        self.download_thread.daemon = True
-        self.download_thread.start()
-        self.monitor_download_thread()
+        filename = self.tree.item(selected[0])['values'][0]
+        self.stop = False
+        self.thread = threading.Thread(target=self.download, args=(filename,))
+        self.thread.daemon = True
+        self.thread.start()
+        self.check_thread()
         
-    def monitor_download_thread(self):
-        """Мониторинг состояния потока скачивания"""
-        if self.download_thread and self.download_thread.is_alive():
-            self.root.after(100, self.monitor_download_thread)
+    def check_thread(self):
+        if self.thread and self.thread.is_alive():
+            self.root.after(100, self.check_thread)
         else:
             self.progress.stop()
             self.btn_download.config(state='normal')
@@ -156,254 +170,267 @@ class FileDownloaderClient:
             self.btn_cancel.config(state='disabled')
             
     def cancel_download(self):
-        """Отмена скачивания"""
-        self.stop_download = True
-        self.status_var.set("Отмена скачивания...")
+        self.stop = True
+        self.status_text.set("Cancelling...")
         
-    def safe_float_convert(self, value):
-        """Безопасное преобразование в float"""
+    def download(self, filename):
         try:
-            return float(value)
-        except (ValueError, TypeError):
-            return 0.0
-        
-    def download_file(self, filename):
-        """Скачивание файла (работает в отдельном потоке)"""
-        try:
-            download_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            download_socket.settimeout(30)
-            download_socket.connect((SERVER_HOST, SERVER_PORT))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(30)
+            sock.connect((SERVER_HOST, SERVER_PORT))
             
-            self.status_var.set(f"Запрашиваем файл {filename}...")
-            self.lbl_info.config(text=f"Подготовка к скачиванию: {filename}")
+            self.status_text.set(f"Requesting {filename}...")
+            self.lbl_status.config(text=f"Requesting: {filename}")
             
-            download_socket.send(f"DOWNLOAD|{filename}".encode('utf-8'))
-            response = download_socket.recv(1024).decode('utf-8')
+            sock.send(f"DOWNLOAD|{filename}".encode('utf-8'))
+            response = sock.recv(1024).decode('utf-8')
             
-            if self.stop_download:
-                download_socket.close()
-                self.status_var.set("Скачивание отменено")
+            if self.stop:
+                sock.close()
+                self.status_text.set("Cancelled")
                 return
                 
             if response.startswith("SUCCESS"):
                 parts = response.split("|")
-                if len(parts) >= 3:
-                    original_size = parts[1]
-                    compression_ratio = self.safe_float_convert(parts[2])
+                if len(parts) >= 4:
+                    orig = int(parts[1])
+                    comp = int(parts[2])
+                    ratio = float(parts[3])
+                    saved = orig - comp
+                    
+                    saved_text = f"{saved} bytes"
+                    if saved > 1024:
+                        saved_text = f"{saved/1024:.2f} KB"
+                    if saved > 1024*1024:
+                        saved_text = f"{saved/(1024*1024):.2f} MB"
+                    
+                    self.root.after(0, self.update_info, orig, comp, ratio, saved_text)
+                    
                 else:
-                    original_size = "0"
-                    compression_ratio = 0.0
+                    orig = 0
+                    comp = 0
+                    ratio = 0.0
+                    saved_text = "0 bytes"
                 
-                save_path = filedialog.asksaveasfilename(
-                    initialfile=f"{filename}.zip",
-                    defaultextension=".zip",
-                    filetypes=[("ZIP files", "*.zip"), ("All files", "*.*")]
-                )
+                time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+                save_name = f"{filename}_{time_str}.zip"
+                save_path = os.path.join(OUTPUT_DIR, save_name)
                 
-                if save_path and not self.stop_download:
-                    self.status_var.set("Скачиваем файл...")
-                    self.lbl_info.config(text=f"Скачивание: {filename}\nПодготовка к передаче...")
-                    
-                    download_socket.send("READY".encode('utf-8'))
-                    
-                    file_size_data = download_socket.recv(1024).decode('utf-8')
-                    if not file_size_data.isdigit():
-                        raise Exception(f"Неверный размер файла: {file_size_data}")
-                    
-                    file_size = int(file_size_data)
-                    self.lbl_info.config(text=f"Скачивание: {filename}\nРазмер: {file_size} байт")
-                    
-                    download_socket.send("SIZE_RECEIVED".encode('utf-8'))
-                    
-                    received_bytes = 0
-                    with open(save_path, 'wb') as f:
-                        while received_bytes < file_size:
-                            if self.stop_download:
-                                break
-                                
-                            remaining = file_size - received_bytes
-                            chunk_size = min(8192, remaining)
+                self.status_text.set("Downloading...")
+                self.lbl_status.config(text=f"Downloading: {filename}\n"
+                                          f"Original: {orig} bytes\n"
+                                          f"Archive: {comp} bytes\n"
+                                          f"Ratio: {ratio:.2f}%\n"
+                                          f"Saved: {saved_text}")
+                
+                sock.send("READY".encode('utf-8'))
+                
+                size_data = sock.recv(1024).decode('utf-8')
+                if not size_data.isdigit():
+                    raise Exception(f"Invalid size: {size_data}")
+                
+                total_size = int(size_data)
+                sock.send("SIZE_RECEIVED".encode('utf-8'))
+                
+                received = 0
+                with open(save_path, 'wb') as f:
+                    while received < total_size:
+                        if self.stop:
+                            break
                             
-                            try:
-                                data = download_socket.recv(chunk_size)
-                                if not data:
-                                    break
-                                    
-                                f.write(data)
-                                received_bytes += len(data)
-                                
-                                if file_size > 0:
-                                    progress = (received_bytes / file_size) * 100
-                                    if received_bytes % max(1, file_size // 10) == 0 or received_bytes == file_size:
-                                        self.lbl_info.config(
-                                            text=f"Скачивание: {filename}\n"
-                                                 f"Прогресс: {received_bytes}/{file_size} байт "
-                                                 f"({progress:.1f}%)"
-                                        )
-                                
-                            except socket.timeout:
-                                continue
-                            except Exception as e:
-                                print(f"Ошибка при получении данных: {e}")
-                                break
-                    
-                    try:
-                        end_signal = download_socket.recv(1024)
-                        if end_signal != b"FILE_END":
-                            print(f"Предупреждение: не получен сигнал завершения")
-                    except:
-                        print(f"Предупреждение: таймаут при ожидании сигнала завершения")
-                    
-                    if self.stop_download:
+                        remaining = total_size - received
+                        chunk = min(8192, remaining)
+                        
                         try:
-                            os.remove(save_path)
-                        except:
-                            pass
-                        self.status_var.set("Скачивание отменено")
-                        self.lbl_info.config(text="Скачивание отменено пользователем")
-                        return
-                    
-                    actual_size = os.path.getsize(save_path)
-                    if actual_size != file_size:
-                        raise Exception(f"Несоответствие размера: ожидалось {file_size}, получено {actual_size}")
-                    
-                    compressed_size = actual_size
-                    try:
-                        ratio_text = f"{compression_ratio:.2f}%"
-                    except:
-                        ratio_text = f"{compression_ratio}%"
-                    
-                    info_text = (f"Файл успешно скачан!\n"
-                                 f"• Исходный размер: {original_size} байт\n"
-                                 f"• Размер архива: {compressed_size} байт\n"
-                                 f"• Эффективность: {ratio_text}\n"
-                                 f"• Сохранен как: {os.path.basename(save_path)}")
-
-                    if compression_ratio > 0:
-                        info_text += f"\n• Сжатие: УСПЕШНО (экономия {ratio_text})"
-                    else:
-                        info_text += f"\n• Сжатие: НЕЭФФЕКТИВНО (файл уже сжат)"
-                    
-                    self.lbl_info.config(text=info_text)
-                    self.status_var.set(f"Файл скачан: {filename}")
-                    message_text = (f"Файл успешно скачан!\n\n"
-                                  f"Исходный размер: {original_size} байт\n"
-                                  f"Сжатый размер: {compressed_size} байт\n"
-                                  f"Эффективность: {ratio_text}\n\n"
-                                  f"Сохранен как:\n{save_path}")
-                    
-                    self.root.after(0, lambda: messagebox.showinfo("Успех", message_text))
-                    
-                else:
-                    self.status_var.set("Скачивание отменено")
-                    
-            else:
-                error_msg = response.replace("ERROR|", "")
-                self.root.after(0, lambda: messagebox.showerror("Ошибка", 
-                    f"Ошибка при скачивании: {error_msg}"))
-                self.status_var.set("Ошибка скачивания")
+                            data = sock.recv(chunk)
+                            if not data:
+                                break
+                                
+                            f.write(data)
+                            received += len(data)
+                            
+                            if total_size > 0:
+                                percent = (received / total_size) * 100
+                                self.root.after(0, self.update_progress, 
+                                               filename, orig, comp, ratio, received, total_size, percent, saved_text, save_path)
+                            
+                        except socket.timeout:
+                            continue
+                        except Exception as e:
+                            print(f"Error: {e}")
+                            break
                 
-            download_socket.close()
+                try:
+                    end = sock.recv(1024)
+                    if end != b"FILE_END":
+                        print("Warning: no end signal")
+                except:
+                    print("Warning: timeout")
+                
+                if self.stop:
+                    try:
+                        os.remove(save_path)
+                    except:
+                        pass
+                    self.status_text.set("Cancelled")
+                    self.root.after(0, self.lbl_status.config, {'text': "Cancelled"})
+                    return
+                
+                actual = os.path.getsize(save_path)
+                if actual != total_size:
+                    raise Exception(f"Size error: expected {total_size}, got {actual}")
+                
+                info = (f"File downloaded!\n"
+                        f"Original: {orig} bytes\n"
+                        f"Archive: {comp} bytes\n"
+                        f"Ratio: {ratio:.2f}%\n"
+                        f"Saved: {saved_text}\n"
+                        f"Path: {save_path}")
+                
+                self.root.after(0, self.lbl_status.config, {'text': info})
+                self.status_text.set(f"Downloaded: {filename}")
+                
+                message = (f"File downloaded!\n\n"
+                          f"Original: {orig} bytes\n"
+                          f"Archive: {comp} bytes\n"
+                          f"Ratio: {ratio:.2f}%\n"
+                          f"Saved: {saved_text}\n\n"
+                          f"Path:\n{save_path}")
+                
+                self.root.after(0, lambda: messagebox.showinfo("Success", message))
+                
+            else:
+                error = response.replace("ERROR|", "")
+                self.root.after(0, lambda: messagebox.showerror("Error", f"Error: {error}"))
+                self.status_text.set("Error")
+                
+            sock.close()
             
         except socket.timeout:
-            error_msg = "Таймаут соединения при скачивании"
-            self.root.after(0, lambda: messagebox.showerror("Ошибка", error_msg))
-            self.status_var.set("Таймаут скачивания")
+            self.root.after(0, lambda: messagebox.showerror("Error", "Timeout"))
+            self.status_text.set("Timeout")
         except Exception as e:
-            error_msg = f"Ошибка при скачивании файла: {e}"
-            self.root.after(0, lambda: messagebox.showerror("Ошибка", error_msg))
-            self.status_var.set("Ошибка скачивания")
+            self.root.after(0, lambda: messagebox.showerror("Error", f"Error: {e}"))
+            self.status_text.set("Error")
+    
+    def update_info(self, orig, comp, ratio, saved_text):
+        def fmt(size):
+            if size >= 1024*1024:
+                return f"{size:,} bytes ({size/(1024*1024):.2f} MB)"
+            elif size >= 1024:
+                return f"{size:,} bytes ({size/1024:.2f} KB)"
+            else:
+                return f"{size:,} bytes"
+        
+        self.lbl_orig.config(text=fmt(orig))
+        self.lbl_comp.config(text=fmt(comp))
+        self.lbl_ratio.config(text=f"{ratio:.2f}%")
+        self.lbl_save.config(text=saved_text)
+    
+    def update_progress(self, filename, orig, comp, ratio, received, total, percent, saved_text, save_path):
+        self.lbl_status.config(
+            text=f"Downloading: {filename}\n"
+                 f"Progress: {received}/{total} bytes ({percent:.1f}%)\n"
+                 f"Original: {orig} bytes\n"
+                 f"Archive: {comp} bytes\n"
+                 f"Ratio: {ratio:.2f}%\n"
+                 f"Saved: {saved_text}\n"
+                 f"Path: {save_path}"
+        )
     
     def show_logs(self):
-        """Показать окно с логами из базы данных"""
         try:
-            log_window = tk.Toplevel(self.root)
-            log_window.title("Логи скачиваний")
-            log_window.geometry("900x500")
+            window = tk.Toplevel(self.root)
+            window.title("Download Logs")
+            window.geometry("1000x500")
 
-            columns = ('id', 'timestamp', 'client_ip', 'filename', 'original_size', 
-                      'compressed_size', 'compression_ratio')
-            tree_logs = ttk.Treeview(log_window, columns=columns, show='headings', height=20)
-            tree_logs.heading('id', text='ID')
-            tree_logs.heading('timestamp', text='Время')
-            tree_logs.heading('client_ip', text='IP клиента')
-            tree_logs.heading('filename', text='Имя файла')
-            tree_logs.heading('original_size', text='Исходный размер')
-            tree_logs.heading('compressed_size', text='Размер архива')
-            tree_logs.heading('compression_ratio', text='Эффективность')
-            tree_logs.column('id', width=50)
-            tree_logs.column('timestamp', width=150)
-            tree_logs.column('client_ip', width=120)
-            tree_logs.column('filename', width=200)
-            tree_logs.column('original_size', width=100)
-            tree_logs.column('compressed_size', width=100)
-            tree_logs.column('compression_ratio', width=100)
-            scrollbar = ttk.Scrollbar(log_window, orient="vertical", command=tree_logs.yview)
-            tree_logs.configure(yscrollcommand=scrollbar.set)
-            frame_buttons = ttk.Frame(log_window)
-            frame_buttons.pack(fill='x', pady=5)
+            tree = ttk.Treeview(window, columns=('id', 'time', 'ip', 'name', 'orig', 'comp', 'ratio', 'path'), show='headings', height=20)
             
-            btn_refresh = ttk.Button(frame_buttons, text="Обновить", 
-                                   command=lambda: self.load_logs_to_tree(tree_logs))
+            tree.heading('id', text='ID')
+            tree.heading('time', text='Time')
+            tree.heading('ip', text='IP')
+            tree.heading('name', text='File name')
+            tree.heading('orig', text='Original')
+            tree.heading('comp', text='Archive')
+            tree.heading('ratio', text='Ratio')
+            tree.heading('path', text='Path')
+            
+            tree.column('id', width=50)
+            tree.column('time', width=150)
+            tree.column('ip', width=120)
+            tree.column('name', width=150)
+            tree.column('orig', width=100)
+            tree.column('comp', width=100)
+            tree.column('ratio', width=80)
+            tree.column('path', width=250)
+            
+            scroll = ttk.Scrollbar(window, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=scroll.set)
+            
+            buttons = ttk.Frame(window)
+            buttons.pack(fill='x', pady=5)
+            
+            btn_refresh = ttk.Button(buttons, text="Refresh", command=lambda: self.load_logs(tree))
             btn_refresh.pack(side='left', padx=5)
             
-            btn_clear = ttk.Button(frame_buttons, text="Очистить логи", 
-                                 command=lambda: self.clear_logs(tree_logs))
+            btn_clear = ttk.Button(buttons, text="Clear logs", command=lambda: self.clear_logs(tree))
             btn_clear.pack(side='left', padx=5)
             
-            btn_export = ttk.Button(frame_buttons, text="Экспорт в CSV", 
-                                  command=self.export_logs_to_csv)
-            btn_export.pack(side='left', padx=5)
-            tree_logs.pack(side='left', fill='both', expand=True, padx=5, pady=5)
-            scrollbar.pack(side='right', fill='y', pady=5)
+            tree.pack(side='left', fill='both', expand=True, padx=5, pady=5)
+            scroll.pack(side='right', fill='y', pady=5)
 
-            self.load_logs_to_tree(tree_logs)
+            self.load_logs(tree)
             
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось загрузить логи: {e}")
+            messagebox.showerror("Error", f"Cannot load logs: {e}")
     
-    def load_logs_to_tree(self, tree_widget):
-        """Загрузка логов из БД в treeview"""
+    def load_logs(self, tree):
         try:
-            for item in tree_widget.get_children():
-                tree_widget.delete(item)
+            for item in tree.get_children():
+                tree.delete(item)
 
             conn = sqlite3.connect('download_log.db')
             cursor = conn.cursor()
-
-            cursor.execute('''
-                SELECT id, timestamp, client_ip, filename, original_size, 
-                       compressed_size, compression_ratio 
-                FROM download_log 
-                ORDER BY timestamp DESC
-            ''')
-            
+            cursor.execute('SELECT * FROM download_log ORDER BY timestamp DESC')
             rows = cursor.fetchall()
-            for row in rows:
-                ratio = row[6] if row[6] is not None else 0.0
-                ratio_text = f"{ratio:.2f}%" if isinstance(ratio, (int, float)) else "0.00%"
-                
-                tree_widget.insert('', 'end', values=(
-                    row[0],  # id
-                    row[1],  # timestamp
-                    row[2],  # client_ip
-                    row[3],  # filename
-                    row[4],  # original_size
-                    row[5],  # compressed_size
-                    ratio_text  # compression_ratio
-                ))
-            
             conn.close()
-
-            if hasattr(tree_widget, 'master'):
-                tree_widget.master.title(f"Логи скачиваний ({len(rows)} записей)")
+            
+            if not rows:
+                tree.insert('', 'end', values=("", "", "", "No logs found", "", "", "", ""))
+                tree.master.title("Logs (0)")
+            else:
+                for row in rows:
+                    id_num, time, ip, name, orig, comp, ratio, path = row
+                    
+                    def fmt(size):
+                        if not isinstance(size, (int, float)):
+                            size = 0
+                        if size >= 1024*1024:
+                            return f"{size/1024/1024:.2f} MB"
+                        elif size >= 1024:
+                            return f"{size/1024:.2f} KB"
+                        else:
+                            return f"{size} bytes"
+                    
+                    ratio_text = f"{ratio:.2f}%" if ratio else "0.00%"
+                    tree.insert('', 'end', values=(
+                        id_num,
+                        time,
+                        ip,
+                        name,
+                        fmt(orig),
+                        fmt(comp),
+                        ratio_text,
+                        path
+                    ))
+                
+                tree.master.title(f"Logs ({len(rows)})")
                 
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка при загрузке логов: {e}")
+            messagebox.showerror("Error", f"Error: {e}")
     
-    def clear_logs(self, tree_widget):
-        """Очистка всех логов"""
-        if messagebox.askyesno("Подтверждение", "Вы уверены, что хотите удалить все логи?"):
+    def clear_logs(self, tree):
+        if messagebox.askyesno("Confirm", "Clear all logs?"):
             try:
                 conn = sqlite3.connect('download_log.db')
                 cursor = conn.cursor()
@@ -411,76 +438,27 @@ class FileDownloaderClient:
                 conn.commit()
                 conn.close()
                 
-                for item in tree_widget.get_children():
-                    tree_widget.delete(item)
+                for item in tree.get_children():
+                    tree.delete(item)
                     
-                messagebox.showinfo("Успех", "Логи успешно очищены")
-                tree_widget.master.title("Логи скачиваний (0 записей)")
+                tree.insert('', 'end', values=("", "", "", "Logs cleared", "", "", "", ""))
+                messagebox.showinfo("Success", "Logs cleared")
+                tree.master.title("Logs (0)")
                 
             except Exception as e:
-                messagebox.showerror("Ошибка", f"Не удалось очистить логи: {e}")
+                messagebox.showerror("Error", f"Cannot clear: {e}")
     
-    def export_logs_to_csv(self):
-        """Экспорт логов в CSV файл"""
+    def open_output(self):
         try:
-
-            file_path = filedialog.asksaveasfilename(
-                defaultextension=".csv",
-                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-                initialfile="download_logs.csv"
-            )
-            
-            if file_path:
-                conn = sqlite3.connect('download_log.db')
-                cursor = conn.cursor()
-                
-                cursor.execute('''
-                    SELECT timestamp, client_ip, filename, original_size, 
-                           compressed_size, compression_ratio 
-                    FROM download_log 
-                    ORDER BY timestamp DESC
-                ''')
-                
-                rows = cursor.fetchall()
-                conn.close()
-
-                with open(file_path, 'w', encoding='utf-8') as f:
-
-                    f.write("Время;IP клиента;Имя файла;Исходный размер;Размер архива;Эффективность\n")
-
-                    for row in rows:
-                        ratio = row[5] if row[5] is not None else 0.0
-                        ratio_text = f"{ratio:.2f}%" if isinstance(ratio, (int, float)) else "0.00%"
-                        
-                        f.write(f"{row[0]};{row[1]};{row[2]};{row[3]};{row[4]};{ratio_text}\n")
-                
-                messagebox.showinfo("Успех", f"Логи экспортированы в:\n{file_path}")
-                
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка при экспорте логов: {e}")
-            
-    def __del__(self):
-        """Закрытие соединения при завершении"""
-        try:
-            if self.socket:
-                self.socket.send("EXIT".encode('utf-8'))
-                self.socket.close()
+            os.startfile(OUTPUT_DIR)
         except:
-            pass
+            messagebox.showerror("Error", f"Cannot open: {OUTPUT_DIR}")
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = FileDownloaderClient(root)
-    
-    def on_closing():
-        app.stop_download = True
-        try:
-            if app.socket:
-                app.socket.send("EXIT".encode('utf-8'))
-                app.socket.close()
-        except:
-            pass
-        root.destroy()
-    
-    root.protocol("WM_DELETE_WINDOW", on_closing)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        app = FileDownloaderClient(root)
+        root.mainloop()
+    except Exception as e:
+        print(f"Error: {e}")
+        input("Press Enter...")

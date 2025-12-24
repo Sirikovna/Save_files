@@ -5,12 +5,16 @@
 
 ## Интерфейс ПО
 
-![](image.png)
+![](images/main.png)
 
 ## Результат скачивания файла с сервера с предварительным архивированием
 
-![](image-1.png)
+![](images/result.png)
+
+## Информация о сжатии
+
+![](images/Compression-info.png)
 
 ## Лог работы
 
-![](image-2.png)
+![](images/logs.png)
